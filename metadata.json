@@ -1,0 +1,1 @@
+{"name":"Sculpture Portrait Analyzer","description":"Compare sculpture photos with portrait reference photos using overlays, gridlines, and automated AI analysis to evaluate proportions and face structures.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
