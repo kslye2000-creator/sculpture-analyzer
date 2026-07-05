@@ -25,6 +25,25 @@ interface LandmarkSequenceItem {
   description: string;
 }
 
+interface ProjectSaveData {
+  version: number;
+  portraitImg: string;
+  sculptureImg: string;
+  portraitAspectRatio: number;
+  sculptureAspectRatio: number;
+  analysis: AnalysisResult;
+  activePresetId: string;
+  isCustom: boolean;
+  showGrid: boolean;
+  gridDensity: number;
+  gridColor: string;
+  gridOpacity: number;
+  showLandmarks: boolean;
+  language: 'en' | 'th';
+}
+
+const SAVE_KEY = 'sculpt_project';
+
 const LANDMARK_SEQUENCE: LandmarkSequenceItem[] = [
   { key: "foreheadTop", label: "Forehead Top (Hairline)", description: "The exact center point of the hairline along the midline." },
   { key: "chin", label: "Chin Bottom", description: "The lowest center point of the chin contour." },
@@ -260,6 +279,8 @@ export default function App() {
 
   // Track coordinates for cursor overlay
   const [hoverCoords, setHoverCoords] = useState<{ x: number; y: number } | null>(null);
+  const [showRestoreBanner, setShowRestoreBanner] = useState<boolean>(false);
+  const saveTimeoutRef = useRef<number>(0);
 
   // File Upload Handlers
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'portrait' | 'sculpture') => {
@@ -774,6 +795,28 @@ export default function App() {
     });
   };
 
+  const onTouchDrag = (e: React.TouchEvent<HTMLDivElement>, containerRef: React.RefObject<HTMLDivElement | null>) => {
+    if (!draggedPoint || !containerRef.current) return;
+    
+    const rect = containerRef.current.getBoundingClientRect();
+    const touch = e.touches[0];
+    const x = Math.max(0, Math.min(1000, Math.round(((touch.clientX - rect.left) / rect.width) * 1000)));
+    const y = Math.max(0, Math.min(1000, Math.round(((touch.clientY - rect.top) / rect.height) * 1000)));
+
+    isManualChangeRef.current = true;
+    setAnalysis(prev => {
+      const landmarksObj = draggedPoint.type === 'portrait' ? prev.portraitLandmarks : prev.sculptureLandmarks;
+      const updatedLandmarks = {
+        ...landmarksObj,
+        [draggedPoint.key]: { x, y }
+      };
+      return {
+        ...prev,
+        [draggedPoint.type === 'portrait' ? 'portraitLandmarks' : 'sculptureLandmarks']: updatedLandmarks
+      };
+    });
+  };
+
   const endDrag = () => {
     if (draggedPoint) {
       setDraggedPoint(null);
@@ -812,13 +855,127 @@ export default function App() {
     }));
   };
 
+  const buildSaveData = (includeImages: boolean): ProjectSaveData => ({
+    version: 1,
+    portraitImg: includeImages ? portraitImg : '',
+    sculptureImg: includeImages ? sculptureImg : '',
+    portraitAspectRatio,
+    sculptureAspectRatio,
+    analysis,
+    activePresetId,
+    isCustom,
+    showGrid,
+    gridDensity,
+    gridColor,
+    gridOpacity,
+    showLandmarks,
+    language,
+  });
+
+  const saveToLocalStorage = () => {
+    try {
+      const data = buildSaveData(true);
+      const serialized = JSON.stringify(data);
+      localStorage.setItem(SAVE_KEY, serialized);
+    } catch {
+      try {
+        const data = buildSaveData(false);
+        const serialized = JSON.stringify(data);
+        localStorage.setItem(SAVE_KEY, serialized);
+      } catch { /* localStorage unavailable */ }
+    }
+  };
+
+  const loadFromLocalStorage = (): ProjectSaveData | null => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  };
+
+  const clearSavedProject = () => {
+    localStorage.removeItem(SAVE_KEY);
+  };
+
+  const scheduleSave = () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = window.setTimeout(saveToLocalStorage, 400);
+  };
+
+  const exportProjectFile = () => {
+    const data = buildSaveData(true);
+    data.version = 1;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.download = `sculpture-project-${dateStr}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importProjectFromFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data: ProjectSaveData = JSON.parse(e.target?.result as string);
+        if (!data.analysis || !data.analysis.portraitLandmarks) return;
+        setPortraitImg(data.portraitImg || PRESETS[0].portrait);
+        setSculptureImg(data.sculptureImg || PRESETS[0].sculpture);
+        setPortraitAspectRatio(data.portraitAspectRatio || 1);
+        setSculptureAspectRatio(data.sculptureAspectRatio || 1);
+        setAnalysis(data.analysis);
+        setActivePresetId(data.activePresetId || '');
+        setIsCustom(data.isCustom || false);
+        setShowGrid(data.showGrid ?? true);
+        setGridDensity(data.gridDensity ?? 12);
+        setGridColor(data.gridColor || "#3B82F6");
+        setGridOpacity(data.gridOpacity ?? 30);
+        setShowLandmarks(data.showLandmarks ?? true);
+        if (data.language) setLanguage(data.language);
+      } catch { /* invalid file */ }
+    };
+    reader.readAsText(file);
+  };
+
+  const tryRestoreSession = () => {
+    const saved = loadFromLocalStorage();
+    if (!saved) return;
+    if (saved.activePresetId) {
+      const preset = PRESETS.find(p => p.id === saved.activePresetId);
+      if (preset) {
+        setPortraitImg(preset.portrait);
+        setSculptureImg(preset.sculpture);
+      }
+    }
+    if (!saved.portraitImg && !saved.activePresetId) {
+      setShowRestoreBanner(true);
+      return;
+    }
+    if (saved.portraitImg) setPortraitImg(saved.portraitImg);
+    if (saved.sculptureImg) setSculptureImg(saved.sculptureImg);
+    setPortraitAspectRatio(saved.portraitAspectRatio || 1);
+    setSculptureAspectRatio(saved.sculptureAspectRatio || 1);
+    setAnalysis(saved.analysis);
+    setActivePresetId(saved.activePresetId || '');
+    setIsCustom(saved.isCustom || false);
+    setShowGrid(saved.showGrid ?? true);
+    setGridDensity(saved.gridDensity ?? 12);
+    setGridColor(saved.gridColor || "#3B82F6");
+    setGridOpacity(saved.gridOpacity ?? 30);
+    setShowLandmarks(saved.showLandmarks ?? true);
+    if (saved.language) setLanguage(saved.language);
+  };
+
   const containerRefPortrait = useRef<HTMLDivElement>(null);
   const containerRefSculpture = useRef<HTMLDivElement>(null);
   const isManualChangeRef = useRef<boolean>(false);
 
-  // Auto recal on mount
+  // Auto recal on mount + check for saved session
   useEffect(() => {
     handleRecalculateRatios();
+    tryRestoreSession();
   }, []);
 
   // Handle manual interaction updates
@@ -828,6 +985,14 @@ export default function App() {
       isManualChangeRef.current = false;
     }
   }, [analysis.portraitLandmarks, analysis.sculptureLandmarks]);
+
+  // Auto-save on analysis/settings changes (debounced)
+  useEffect(() => {
+    scheduleSave();
+  }, [
+    analysis, showGrid, gridDensity, gridColor, gridOpacity, showLandmarks,
+    activePresetId, isCustom, portraitAspectRatio, sculptureAspectRatio, language
+  ]);
 
   const isLineRelatedToCategory = (lineKey: string, categoryKey: string | null): boolean => {
     if (!categoryKey) return false;
@@ -1146,6 +1311,38 @@ export default function App() {
             </div>
           </div>
 
+          {/* Section: Project Save/Load */}
+          <div className="space-y-2 border-t border-[#2D3139] pt-4">
+            <h3 className="text-[10px] font-bold text-[#A0A4AB] uppercase tracking-widest">
+              {t("PROJECT", "โปรเจกต์")}
+            </h3>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={exportProjectFile}
+                className="flex items-center justify-center gap-1.5 px-2 py-2 rounded text-[11px] font-bold transition-all cursor-pointer border bg-[#1E2229] border-[#2D3139] text-[#A0A4AB] hover:border-[#3B82F6] hover:text-white"
+              >
+                {t("Export", "ส่งออก")}
+              </button>
+              <label
+                htmlFor="project-import"
+                className="flex items-center justify-center gap-1.5 px-2 py-2 rounded text-[11px] font-bold transition-all cursor-pointer border bg-[#1E2229] border-[#2D3139] text-[#A0A4AB] hover:border-amber-500 hover:text-white"
+              >
+                {t("Import", "นำเข้า")}
+              </label>
+            </div>
+            <input
+              type="file"
+              accept=".json"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) importProjectFromFile(file);
+                e.target.value = '';
+              }}
+              id="project-import"
+              className="hidden"
+            />
+          </div>
+
           {/* Prompt info */}
           <div className="p-3 rounded-lg bg-[#1E2229] border border-[#2D3139] mt-auto">
             <div className="flex gap-2">
@@ -1171,8 +1368,31 @@ export default function App() {
           }}
           onMouseLeave={() => setHoverCoords(null)}
         >
-             {/* Manual Placement Guided Banner */}
-             {placementState.active && placementState.target && (
+              {/* Restore Session Banner */}
+              {showRestoreBanner && (
+                <div className="bg-[#1D212A] border border-amber-500/30 p-4 rounded-xl shadow-2xl flex items-center justify-between gap-4 animate-fade-in z-20">
+                  <div className="flex items-center gap-3">
+                    <Info className="w-5 h-5 text-amber-400 shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-white">{t("Resume previous session?", "กลับไปทำงานต่อ?")}</div>
+                      <div className="text-[12px] text-[#A0A4AB]">
+                        {t("Your previous analysis is saved. Upload your custom images again to restore.", "มีการบันทึกข้อมูลการวิเคราะห์ครั้งก่อน อัปโหลดภาพของคุณอีกครั้งเพื่อกู้คืน")}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setShowRestoreBanner(false)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#2C313B] text-[#A0A4AB] hover:bg-[#373D4B] hover:text-white transition-all cursor-pointer"
+                    >
+                      {t("Dismiss", "ปิด")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Manual Placement Guided Banner */}
+              {placementState.active && placementState.target && (
                <div className="bg-[#1D212A] border border-[#3B82F6]/30 p-4 rounded-xl shadow-2xl flex flex-col md:flex-row items-center justify-between gap-4 animate-fade-in z-20">
                  <div className="flex items-center gap-3">
                    <div className="w-8 h-8 rounded-full bg-[#3B82F6]/10 flex items-center justify-center text-[#3B82F6] font-bold">
@@ -1227,6 +1447,8 @@ export default function App() {
                 <div 
                   onMouseMove={(e) => onDrag(e, containerRefPortrait)}
                   onMouseUp={endDrag}
+                  onTouchMove={(e) => onTouchDrag(e, containerRefPortrait)}
+                  onTouchEnd={endDrag}
                   className="bg-[#1A1C23] rounded-xl border border-[#2D3139] relative overflow-hidden flex flex-col shadow-lg select-none animate-fade-in"
                 >
                   <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] font-bold text-white z-10 border border-[#2D3139] flex items-center gap-1">
@@ -1246,7 +1468,8 @@ export default function App() {
                         maxWidth: '100%',
                         maxHeight: 'calc(100vh - 280px)', 
                         display: 'block',
-                        cursor: placementState.active && placementState.target === 'portrait' ? 'crosshair' : 'default'
+                        cursor: placementState.active && placementState.target === 'portrait' ? 'crosshair' : 'default',
+                        touchAction: 'none'
                       }}
                     >
                       <img 
@@ -1276,12 +1499,13 @@ export default function App() {
                           <div
                             key={`p-${key}`}
                             onMouseDown={() => startDrag('portrait', key as keyof Landmarks)}
+                            onTouchStart={() => startDrag('portrait', key as keyof Landmarks)}
                             className={`absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full cursor-move transition-transform duration-75 ${
                               isMain 
                                 ? "bg-amber-400 border-2 border-white scale-150 z-30 ring-4 ring-amber-400/30" 
                                 : "bg-[#3B82F6] border border-white z-20 hover:scale-125"
                             }`}
-                            style={{ left: `${point.x / 10}%`, top: `${point.y / 10}%` }}
+                            style={{ left: `${point.x / 10}%`, top: `${point.y / 10}%`, touchAction: 'none' }}
                             title={`${key}: X:${point.x} Y:${point.y}`}
                           >
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/80 text-[8px] font-mono font-semibold text-white px-1 py-0.2 rounded opacity-0 hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
@@ -1428,6 +1652,8 @@ export default function App() {
                 <div 
                   onMouseMove={(e) => onDrag(e, containerRefSculpture)}
                   onMouseUp={endDrag}
+                  onTouchMove={(e) => onTouchDrag(e, containerRefSculpture)}
+                  onTouchEnd={endDrag}
                   className="bg-[#1A1C23] rounded-xl border border-[#2D3139] relative overflow-hidden flex flex-col shadow-lg select-none animate-fade-in"
                 >
                   <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-md text-[10px] font-bold text-white z-10 border border-[#2D3139] flex items-center gap-1">
@@ -1447,7 +1673,8 @@ export default function App() {
                         maxWidth: '100%',
                         maxHeight: 'calc(100vh - 280px)', 
                         display: 'block',
-                        cursor: placementState.active && placementState.target === 'sculpture' ? 'crosshair' : 'default'
+                        cursor: placementState.active && placementState.target === 'sculpture' ? 'crosshair' : 'default',
+                        touchAction: 'none'
                       }}
                     >
                       <img 
@@ -1478,12 +1705,13 @@ export default function App() {
                           <div
                             key={`s-${key}`}
                             onMouseDown={() => startDrag('sculpture', key as keyof Landmarks)}
+                            onTouchStart={() => startDrag('sculpture', key as keyof Landmarks)}
                             className={`absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full cursor-move transition-transform duration-75 ${
                               isMain 
                                 ? "bg-amber-400 border-2 border-white scale-150 z-30 ring-4 ring-amber-400/30" 
                                 : "bg-amber-500 border border-white z-20 hover:scale-125"
                             }`}
-                            style={{ left: `${point.x / 10}%`, top: `${point.y / 10}%` }}
+                            style={{ left: `${point.x / 10}%`, top: `${point.y / 10}%`, touchAction: 'none' }}
                             title={`${key}: X:${point.x} Y:${point.y}`}
                           >
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/80 text-[8px] font-mono font-semibold text-white px-1 py-0.2 rounded opacity-0 hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">

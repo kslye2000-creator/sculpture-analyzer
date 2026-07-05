@@ -12,7 +12,8 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "dist:desktop": "npm run build && electron-packager . SculptureAnalyzer --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar"
+    "dist:desktop": "npm run build && electron-packager . SculptureAnalyzer --platform=win32 --arch=x64 --out=dist-desktop --overwrite --asar",
+    "deploy": "vite build && gh-pages -d dist"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -33,6 +34,7 @@
     "electron-builder": "^26.15.3",
     "electron-packager": "^17.1.2",
     "esbuild": "^0.25.0",
+    "gh-pages": "^6.3.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

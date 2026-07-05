@@ -5,7 +5,11 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/sculpture-analyzer/',
     plugins: [react(), tailwindcss()],
+    build: {
+      crossorigin: false,
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
